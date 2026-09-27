@@ -1,11 +1,13 @@
 import { Router } from "express";
+
 import { authMiddleware } from "../../middlewares/auth.middleware";
 import { requireRole } from "../../middlewares/role.middleware";
+
 import * as analyticsController from "./analytics.controller";
 
 const router = Router();
 
-// Get all employees overview (HR only)
+// Get all employees overview (HR or ADMIN)
 router.get(
 	"/employees/overview",
 	authMiddleware,
@@ -13,7 +15,7 @@ router.get(
 	analyticsController.getAllEmployeesOverview
 );
 
-// Get employee skill progress (HR, MANAGER, or the employee themselves)
+// Get employee skill progress (HR, MANAGER, or ADMIN)
 router.get(
 	"/employees/:employeeId/skill-progress",
 	authMiddleware,
@@ -21,7 +23,7 @@ router.get(
 	analyticsController.getEmployeeSkillProgress
 );
 
-// Get specific skill timeline for employee (HR, MANAGER, or the employee themselves)
+// Get specific skill timeline for employee
 router.get(
 	"/employees/:employeeId/skills/:skillId/timeline",
 	authMiddleware,
@@ -29,6 +31,7 @@ router.get(
 	analyticsController.getSkillProgressTimeline
 );
 
+// Dashboard statistics
 router.get(
 	"/dashboard-stats",
 	authMiddleware,
@@ -36,6 +39,7 @@ router.get(
 	analyticsController.getDashboardStats
 );
 
+// Skill spectrum by department
 router.get(
 	"/skill-spectrum",
 	authMiddleware,
@@ -43,11 +47,28 @@ router.get(
 	analyticsController.getSkillSpectrumByDepartment
 );
 
+// Employee learning speed
 router.get(
 	"/learning-speed",
 	authMiddleware,
 	requireRole("HR", "ADMIN"),
 	analyticsController.getLearningSpeed
+);
+
+// Skill gap analysis
+router.get(
+	"/skill-gaps",
+	authMiddleware,
+	requireRole("HR", "ADMIN"),
+	analyticsController.getSkillGaps
+);
+
+// Training needs analysis
+router.get(
+	"/training-needs",
+	authMiddleware,
+	requireRole("HR", "ADMIN"),
+	analyticsController.getTrainingNeeds
 );
 
 export default router;

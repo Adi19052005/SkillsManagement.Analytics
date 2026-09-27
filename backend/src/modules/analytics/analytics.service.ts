@@ -1,7 +1,12 @@
 import { prisma } from "../../utils/db";
 import { Role } from "@prisma/client";
 
-type LearningCategory = "FAST" | "MODERATE" | "SLOW" | "NO_PROGRESS" | "REGRESSION";
+type LearningCategory =
+	| "FAST"
+	| "MODERATE"
+	| "SLOW"
+	| "NO_PROGRESS"
+	| "REGRESSION";
 
 function categorizeLearningSpeed(score: number): LearningCategory {
 	if (score >= 0.03) return "FAST";
@@ -11,21 +16,35 @@ function categorizeLearningSpeed(score: number): LearningCategory {
 	return "REGRESSION";
 }
 
-export const getLearningSpeed = async (startDate?: string, endDate?: string) => {
+export const getLearningSpeed = async (
+	startDate?: string,
+	endDate?: string
+) => {
 	const employees = await prisma.employeeProfile.findMany({
 		where: { user: { role: Role.EMPLOYEE } },
 		select: {
 			id: true,
 			fullname: true,
-			department: { select: { id: true, name: true } }
-		}
+			department: {
+				select: {
+					id: true,
+					name: true,
+				},
+			},
+		},
 	});
 
 	if (employees.length === 0) {
 		return {
 			departments: [],
 			employees: [],
-			summary: { FAST: 0, MODERATE: 0, SLOW: 0, NO_PROGRESS: 0, REGRESSION: 0 }
+			summary: {
+				FAST: 0,
+				MODERATE: 0,
+				SLOW: 0,
+				NO_PROGRESS: 0,
+				REGRESSION: 0,
+			},
 		};
 	}
 
@@ -36,30 +55,53 @@ export const getLearningSpeed = async (startDate?: string, endDate?: string) => 
 			? {
 					changedAt: {
 						...(startDate ? { gte: new Date(startDate) } : {}),
-						...(endDate ? { lte: new Date(endDate + "T23:59:59.999Z") } : {})
-					}
-			  }
+						...(endDate
+							? { lte: new Date(endDate + "T23:59:59.999Z") }
+							: {}),
+					},
+				}
 			: {};
 
 	const logs = await prisma.skillProgressLog.findMany({
-		where: { employeeId: { in: employeeIds }, ...dateFilter },
-		select: { employeeId: true, skillId: true, newRating: true, changedAt: true },
-		orderBy: { changedAt: "asc" }
+		where: {
+			employeeId: { in: employeeIds },
+			...dateFilter,
+		},
+		select: {
+			employeeId: true,
+			skillId: true,
+			newRating: true,
+			changedAt: true,
+		},
+		orderBy: {
+			changedAt: "asc",
+		},
 	});
 
-	// Group logs: employeeId -> skillId -> ordered entries
 	const byEmployee = new Map<
 		string,
 		Map<string, Array<{ newRating: number; changedAt: Date }>>
 	>();
+
 	for (const log of logs) {
-		if (!byEmployee.has(log.employeeId)) byEmployee.set(log.employeeId, new Map());
+		if (!byEmployee.has(log.employeeId)) {
+			byEmployee.set(log.employeeId, new Map());
+		}
+
 		const bySkill = byEmployee.get(log.employeeId)!;
-		if (!bySkill.has(log.skillId)) bySkill.set(log.skillId, []);
-		bySkill.get(log.skillId)!.push({ newRating: log.newRating, changedAt: log.changedAt });
+
+		if (!bySkill.has(log.skillId)) {
+			bySkill.set(log.skillId, []);
+		}
+
+		bySkill
+			.get(log.skillId)!
+			.push({
+				newRating: log.newRating,
+				changedAt: log.changedAt,
+			});
 	}
 
-	// Per-employee scores
 	const employeeResults = employees.map((emp) => {
 		const bySkill = byEmployee.get(emp.id);
 		const velocities: number[] = [];
@@ -67,20 +109,27 @@ export const getLearningSpeed = async (startDate?: string, endDate?: string) => 
 		if (bySkill) {
 			for (const skillLogs of bySkill.values()) {
 				if (skillLogs.length < 2) continue;
+
 				const first = skillLogs[0];
 				const last = skillLogs[skillLogs.length - 1];
+
 				const delta = last.newRating - first.newRating;
+
 				const days = Math.max(
 					1,
-					(last.changedAt.getTime() - first.changedAt.getTime()) / (1000 * 60 * 60 * 24)
+					(last.changedAt.getTime() -
+						first.changedAt.getTime()) /
+						(1000 * 60 * 60 * 24)
 				);
+
 				velocities.push(delta / days);
 			}
 		}
 
 		const score =
 			velocities.length > 0
-				? velocities.reduce((s, v) => s + v, 0) / velocities.length
+				? velocities.reduce((s, v) => s + v, 0) /
+					velocities.length
 				: 0;
 
 		return {
@@ -89,47 +138,66 @@ export const getLearningSpeed = async (startDate?: string, endDate?: string) => 
 			department: emp.department?.name ?? "Unassigned",
 			score: parseFloat(score.toFixed(6)),
 			category: categorizeLearningSpeed(score),
-			validSkillCount: velocities.length
+			validSkillCount: velocities.length,
 		};
 	});
 
-	// Department aggregates
-	const deptMap = new Map<string, { scores: number[]; count: number }>();
+	const deptMap = new Map<
+		string,
+		{ scores: number[]; count: number }
+	>();
+
 	for (const emp of employeeResults) {
-		if (!deptMap.has(emp.department)) deptMap.set(emp.department, { scores: [], count: 0 });
+		if (!deptMap.has(emp.department)) {
+			deptMap.set(emp.department, {
+				scores: [],
+				count: 0,
+			});
+		}
+
 		const entry = deptMap.get(emp.department)!;
+
 		entry.scores.push(emp.score);
 		entry.count += 1;
 	}
 
 	const departmentResults = Array.from(deptMap.entries())
 		.map(([name, { scores, count }]) => {
-			const avg = scores.reduce((s, v) => s + v, 0) / scores.length;
+			const avg =
+				scores.reduce((s, v) => s + v, 0) /
+				scores.length;
+
 			return {
 				department: name,
 				score: parseFloat(avg.toFixed(6)),
 				category: categorizeLearningSpeed(avg),
-				employeeCount: count
+				employeeCount: count,
 			};
 		})
 		.sort((a, b) => a.department.localeCompare(b.department));
 
-	// Summary counts by category
 	const summary: Record<LearningCategory, number> = {
 		FAST: 0,
 		MODERATE: 0,
 		SLOW: 0,
 		NO_PROGRESS: 0,
-		REGRESSION: 0
+		REGRESSION: 0,
 	};
+
 	for (const emp of employeeResults) {
 		summary[emp.category] += 1;
 	}
 
-	return { departments: departmentResults, employees: employeeResults, summary };
+	return {
+		departments: departmentResults,
+		employees: employeeResults,
+		summary,
+	};
 };
 
-export const getEmployeeSkillProgress = async (employeeId: string) => {
+export const getEmployeeSkillProgress = async (
+	employeeId: string
+) => {
 	const employee = await prisma.employeeProfile.findUnique({
 		where: { id: employeeId },
 		select: {
@@ -137,22 +205,21 @@ export const getEmployeeSkillProgress = async (employeeId: string) => {
 			fullname: true,
 			department: {
 				select: {
-					name: true
-				}
-			}
-		}
+					name: true,
+				},
+			},
+		},
 	});
 
 	if (!employee) {
 		throw new Error("Employee not found");
 	}
 
-	// Get all skills with their progress logs
 	const employeeSkills = await prisma.employeeSkill.findMany({
 		where: { employeeId },
 		include: {
-			skill: true
-		}
+			skill: true,
+		},
 	});
 
 	const progressLogs = await prisma.skillProgressLog.findMany({
@@ -165,25 +232,28 @@ export const getEmployeeSkillProgress = async (employeeId: string) => {
 					email: true,
 					profile: {
 						select: {
-							fullname: true
-						}
-					}
-				}
-			}
+							fullname: true,
+						},
+					},
+				},
+			},
 		},
 		orderBy: {
-			changedAt: "asc"
-		}
+			changedAt: "asc",
+		},
 	});
 
-	// Group logs by skill
 	const skillProgress = employeeSkills.map((empSkill) => {
-		const logs = progressLogs.filter((log) => log.skillId === empSkill.skillId);
+		const logs = progressLogs.filter(
+			(log) => log.skillId === empSkill.skillId
+		);
 
 		return {
 			skillId: empSkill.skill.id,
 			skillName: empSkill.skill.name,
-			currentRating: empSkill.approvedRating || empSkill.selfRating,
+			currentRating:
+				empSkill.approvedRating ??
+				empSkill.selfRating,
 			status: empSkill.status,
 			history: logs.map((log) => ({
 				rating: log.newRating,
@@ -194,18 +264,21 @@ export const getEmployeeSkillProgress = async (employeeId: string) => {
 				reviewedBy: log.reviewer
 					? {
 							email: log.reviewer.email,
-							fullname: log.reviewer.profile?.fullname || "Unknown"
-					  }
-					: null
-			}))
+							fullname:
+								log.reviewer.profile?.fullname ||
+								"Unknown",
+						}
+					: null,
+			})),
 		};
 	});
 
 	return {
 		employeeId: employee.id,
 		fullname: employee.fullname,
-		department: employee.department?.name || 'Unassigned',
-		skills: skillProgress
+		department:
+			employee.department?.name || "Unassigned",
+		skills: skillProgress,
 	};
 };
 
@@ -214,77 +287,95 @@ export const getAllEmployeesOverview = async () => {
 		include: {
 			department: {
 				select: {
-					name: true
-				}
+					name: true,
+				},
 			},
 			user: {
 				select: {
-					role: true
-				}
+					role: true,
+				},
 			},
 			manager: {
 				select: {
-					fullname: true
-				}
+					fullname: true,
+				},
 			},
 			employeeSkills: {
 				include: {
-					skill: true
-				}
-			}
+					skill: true,
+				},
+			},
 		},
 		orderBy: {
-			fullname: "asc"
-		}
+			fullname: "asc",
+		},
 	});
 
 	return employees.map((emp) => {
 		const totalSkills = emp.employeeSkills.length;
+
 		const approvedSkills = emp.employeeSkills.filter(
-			(es) => es.status === "APPROVED" || es.status === "EDITED"
+			(es) =>
+				es.status === "APPROVED" ||
+				es.status === "EDITED"
 		).length;
+
 		const pendingSkills = emp.employeeSkills.filter(
 			(es) => es.status === "PENDING"
 		).length;
 
-		// Calculate average rating (approved ratings only)
 		const approvedRatings = emp.employeeSkills
 			.filter((es) => es.approvedRating !== null)
 			.map((es) => es.approvedRating as number);
 
 		const averageRating =
 			approvedRatings.length > 0
-				? approvedRatings.reduce((sum, rating) => sum + rating, 0) /
-				  approvedRatings.length
+				? approvedRatings.reduce(
+						(sum, rating) => sum + rating,
+						0
+					) / approvedRatings.length
 				: 0;
 
-		// Get last updated date
 		const lastUpdated =
 			emp.employeeSkills.length > 0
-				? emp.employeeSkills.reduce((latest, es) =>
-						es.updatedAt > latest ? es.updatedAt : latest
-				  , emp.employeeSkills[0].updatedAt)
+				? emp.employeeSkills.reduce(
+						(latest, es) =>
+							es.updatedAt > latest
+								? es.updatedAt
+								: latest,
+						emp.employeeSkills[0].updatedAt
+					)
 				: null;
 
 		return {
 			id: emp.id,
 			fullname: emp.fullname,
-			department: emp.department?.name || 'Unassigned',
+			department:
+				emp.department?.name || "Unassigned",
 			role: emp.user.role,
-			manager: emp.manager ? { fullname: emp.manager.fullname } : null,
+			manager: emp.manager
+				? { fullname: emp.manager.fullname }
+				: null,
 			totalSkills,
 			approvedSkills,
 			pendingSkills,
-			averageRating: parseFloat(averageRating.toFixed(2)),
-			lastUpdated
+			averageRating: parseFloat(
+				averageRating.toFixed(2)
+			),
+			lastUpdated,
 		};
 	});
 };
 
-export const getSkillSpectrumByDepartment = async (skillId: string) => {
+export const getSkillSpectrumByDepartment = async (
+	skillId: string
+) => {
 	const skill = await prisma.skill.findUnique({
 		where: { id: skillId },
-		select: { id: true, name: true }
+		select: {
+			id: true,
+			name: true,
+		},
 	});
 
 	if (!skill) {
@@ -296,25 +387,25 @@ export const getSkillSpectrumByDepartment = async (skillId: string) => {
 			employees: {
 				where: {
 					user: {
-						role: Role.EMPLOYEE
-					}
+						role: Role.EMPLOYEE,
+					},
 				},
 				include: {
 					employeeSkills: {
 						where: {
-							skillId
+							skillId,
 						},
 						select: {
 							selfRating: true,
-							approvedRating: true
-						}
-					}
-				}
-			}
+							approvedRating: true,
+						},
+					},
+				},
+			},
 		},
 		orderBy: {
-			name: "asc"
-		}
+			name: "asc",
+		},
 	});
 
 	const rows = departments.map((department) => {
@@ -324,12 +415,13 @@ export const getSkillSpectrumByDepartment = async (skillId: string) => {
 			level2: 0,
 			level3: 0,
 			level4: 0,
-			level5: 0
+			level5: 0,
 		};
 
 		department.employees.forEach((employee) => {
 			const rating = employee.employeeSkills[0]
-				? employee.employeeSkills[0].approvedRating ?? employee.employeeSkills[0].selfRating
+				? employee.employeeSkills[0].approvedRating ??
+					employee.employeeSkills[0].selfRating
 				: null;
 
 			if (!rating) {
@@ -348,7 +440,7 @@ export const getSkillSpectrumByDepartment = async (skillId: string) => {
 			departmentId: department.id,
 			departmentName: department.name,
 			headcount: department.employees.length,
-			levels
+			levels,
 		};
 	});
 
@@ -361,6 +453,7 @@ export const getSkillSpectrumByDepartment = async (skillId: string) => {
 			acc.level3 += row.levels.level3;
 			acc.level4 += row.levels.level4;
 			acc.level5 += row.levels.level5;
+
 			return acc;
 		},
 		{
@@ -370,14 +463,14 @@ export const getSkillSpectrumByDepartment = async (skillId: string) => {
 			level2: 0,
 			level3: 0,
 			level4: 0,
-			level5: 0
+			level5: 0,
 		}
 	);
 
 	return {
 		skill,
 		departments: rows,
-		totals
+		totals,
 	};
 };
 
@@ -388,8 +481,8 @@ export const getSkillProgressTimeline = async (
 	const employee = await prisma.employeeProfile.findUnique({
 		where: { id: employeeId },
 		select: {
-			fullname: true
-		}
+			fullname: true,
+		},
 	});
 
 	if (!employee) {
@@ -400,8 +493,8 @@ export const getSkillProgressTimeline = async (
 		where: { id: skillId },
 		select: {
 			name: true,
-			description: true
-		}
+			description: true,
+		},
 	});
 
 	if (!skill) {
@@ -411,7 +504,7 @@ export const getSkillProgressTimeline = async (
 	const timeline = await prisma.skillProgressLog.findMany({
 		where: {
 			employeeId,
-			skillId
+			skillId,
 		},
 		include: {
 			reviewer: {
@@ -419,33 +512,37 @@ export const getSkillProgressTimeline = async (
 					email: true,
 					profile: {
 						select: {
-							fullname: true
-						}
-					}
-				}
-			}
+							fullname: true,
+						},
+					},
+				},
+			},
 		},
 		orderBy: {
-			changedAt: "asc"
-		}
+			changedAt: "asc",
+		},
 	});
 
 	const currentSkill = await prisma.employeeSkill.findUnique({
 		where: {
 			employeeId_skillId: {
 				employeeId,
-				skillId
-			}
-		}
+				skillId,
+			},
+		},
 	});
 
 	if (!currentSkill) {
-		throw new Error("Employee has not rated this skill");
+		throw new Error(
+			"Employee has not rated this skill"
+		);
 	}
 
 	const totalImprovement =
 		timeline.length > 0
-			? timeline[timeline.length - 1].newRating - (timeline[0].previousRating || timeline[0].newRating)
+			? timeline[timeline.length - 1].newRating -
+				(timeline[0].previousRating ||
+					timeline[0].newRating)
 			: 0;
 
 	const durationDays =
@@ -454,13 +551,20 @@ export const getSkillProgressTimeline = async (
 					(timeline[timeline.length - 1].changedAt.getTime() -
 						timeline[0].changedAt.getTime()) /
 						(1000 * 60 * 60 * 24)
-			  )
+				)
 			: 0;
 
 	return {
-		employee: { fullname: employee.fullname },
-		skill: { name: skill.name, description: skill.description },
-		currentRating: currentSkill.approvedRating || currentSkill.selfRating,
+		employee: {
+			fullname: employee.fullname,
+		},
+		skill: {
+			name: skill.name,
+			description: skill.description,
+		},
+		currentRating:
+			currentSkill.approvedRating ??
+			currentSkill.selfRating,
 		status: currentSkill.status,
 		timeline: timeline.map((log) => ({
 			date: log.changedAt,
@@ -471,58 +575,84 @@ export const getSkillProgressTimeline = async (
 			reviewedBy: log.reviewer
 				? {
 						email: log.reviewer.email,
-						fullname: log.reviewer.profile?.fullname || "Unknown"
-				  }
-				: null
+						fullname:
+							log.reviewer.profile?.fullname ||
+							"Unknown",
+					}
+				: null,
 		})),
 		totalImprovement,
-		durationDays
+		durationDays,
 	};
 };
 
 export const getDashboardStats = async () => {
 	const activeProjects = await prisma.project.count({
-		where: { status: "ACTIVE" }
+		where: {
+			status: "ACTIVE",
+		},
 	});
-	
-	const totalEmployees = await prisma.employeeProfile.count();
-	
-	const pendingAssignments = await prisma.assignmentRequest.count({
-		where: { status: "PENDING" }
-	});
+
+	const totalEmployees =
+		await prisma.employeeProfile.count();
+
+	const pendingAssignments =
+		await prisma.assignmentRequest.count({
+			where: {
+				status: "PENDING",
+			},
+		});
 
 	const thirtyDaysAgo = new Date();
-	thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+	thirtyDaysAgo.setDate(
+		thirtyDaysAgo.getDate() - 30
+	);
+
 	const newSkills = await prisma.skill.count({
-		where: { createdAt: { gte: thirtyDaysAgo } }
+		where: {
+			createdAt: {
+				gte: thirtyDaysAgo,
+			},
+		},
 	});
 
-	// Get skill progress logs for the last 30 days
-	const recentLogs = await prisma.skillProgressLog.findMany({
-		where: { changedAt: { gte: thirtyDaysAgo } },
-		select: { changedAt: true }
-	});
+	const recentLogs =
+		await prisma.skillProgressLog.findMany({
+			where: {
+				changedAt: {
+					gte: thirtyDaysAgo,
+				},
+			},
+			select: {
+				changedAt: true,
+			},
+		});
 
-	// Aggregate by day
 	const activityByDay: Record<string, number> = {};
-	
-	// Initialize last 30 days with 0
+
 	for (let i = 29; i >= 0; i--) {
 		const d = new Date();
 		d.setDate(d.getDate() - i);
-		activityByDay[d.toISOString().split('T')[0]] = 0;
+
+		activityByDay[
+			d.toISOString().split("T")[0]
+		] = 0;
 	}
 
-	recentLogs.forEach(log => {
-		const dateStr = log.changedAt.toISOString().split('T')[0];
+	recentLogs.forEach((log) => {
+		const dateStr =
+			log.changedAt.toISOString().split("T")[0];
+
 		if (activityByDay[dateStr] !== undefined) {
 			activityByDay[dateStr]++;
 		}
 	});
 
-	const activityGraphData = Object.entries(activityByDay).map(([date, count]) => ({
+	const activityGraphData = Object.entries(
+		activityByDay
+	).map(([date, count]) => ({
 		date,
-		count
+		count,
 	}));
 
 	return {
@@ -530,6 +660,365 @@ export const getDashboardStats = async () => {
 		totalEmployees,
 		pendingAssignments,
 		newSkills,
-		activityGraphData
+		activityGraphData,
+	};
+};
+
+/**
+ * Returns skill gaps for employees based on task skill requirements.
+ *
+ * A gap exists when:
+ * approved employee rating < required task rating.
+ *
+ * Employees without an approved rating are treated as having
+ * no proven capability for that requirement.
+ */
+export const getSkillGaps = async () => {
+	const tasks = await prisma.task.findMany({
+		where: {
+			status: {
+				not: "COMPLETED",
+			},
+		},
+		include: {
+			project: {
+				select: {
+					id: true,
+					name: true,
+				},
+			},
+			skillRequirements: {
+				include: {
+					skill: {
+						select: {
+							id: true,
+							name: true,
+						},
+					},
+				},
+			},
+		},
+		orderBy: [
+			{
+				priority: "desc",
+			},
+			{
+				dueDate: "asc",
+			},
+		],
+	});
+
+	const employees = await prisma.employeeProfile.findMany({
+		where: {
+			user: {
+				role: Role.EMPLOYEE,
+			},
+		},
+		select: {
+			id: true,
+			fullname: true,
+			department: {
+				select: {
+					id: true,
+					name: true,
+				},
+			},
+			employeeSkills: {
+				select: {
+					skillId: true,
+					approvedRating: true,
+				},
+			},
+		},
+	});
+
+	const gaps: Array<{
+		employeeId: string;
+		employeeName: string;
+		departmentId: string | null;
+		departmentName: string;
+		taskId: string;
+		taskTitle: string;
+		projectId: string;
+		projectName: string;
+		skillId: string;
+		skillName: string;
+		requiredRating: number;
+		approvedRating: number | null;
+		gap: number;
+		mandatory: boolean;
+		weight: number;
+	}> = [];
+
+	for (const task of tasks) {
+		for (const requirement of task.skillRequirements) {
+			for (const employee of employees) {
+				const employeeSkill =
+					employee.employeeSkills.find(
+						(skill) =>
+							skill.skillId ===
+							requirement.skillId
+					);
+
+				const approvedRating =
+					employeeSkill?.approvedRating ?? null;
+
+				if (
+					approvedRating === null ||
+					approvedRating <
+						requirement.requiredRating
+				) {
+					const gap =
+						approvedRating === null
+							? requirement.requiredRating
+							: requirement.requiredRating -
+								approvedRating;
+
+					gaps.push({
+						employeeId: employee.id,
+						employeeName: employee.fullname,
+						departmentId:
+							employee.department?.id ??
+							null,
+						departmentName:
+							employee.department?.name ??
+							"Unassigned",
+						taskId: task.id,
+						taskTitle: task.title,
+						projectId: task.project.id,
+						projectName: task.project.name,
+						skillId: requirement.skillId,
+						skillName: requirement.skill.name,
+						requiredRating:
+							requirement.requiredRating,
+						approvedRating,
+						gap,
+						mandatory:
+							requirement.mandatory,
+						weight: requirement.weight,
+					});
+				}
+			}
+		}
+	}
+
+	const skillSummaryMap = new Map<
+		string,
+		{
+			skillId: string;
+			skillName: string;
+			totalGaps: number;
+			totalGapPoints: number;
+			employeesAffected: Set<string>;
+		}
+	>();
+
+	for (const gap of gaps) {
+		if (!skillSummaryMap.has(gap.skillId)) {
+			skillSummaryMap.set(gap.skillId, {
+				skillId: gap.skillId,
+				skillName: gap.skillName,
+				totalGaps: 0,
+				totalGapPoints: 0,
+				employeesAffected: new Set(),
+			});
+		}
+
+		const summary =
+			skillSummaryMap.get(gap.skillId)!;
+
+		summary.totalGaps += 1;
+		summary.totalGapPoints += gap.gap;
+		summary.employeesAffected.add(
+			gap.employeeId
+		);
+	}
+
+	const skillSummary = Array.from(
+		skillSummaryMap.values()
+	)
+		.map((summary) => ({
+			skillId: summary.skillId,
+			skillName: summary.skillName,
+			totalGaps: summary.totalGaps,
+			totalGapPoints: summary.totalGapPoints,
+			employeesAffected:
+				summary.employeesAffected.size,
+		}))
+		.sort(
+			(a, b) =>
+				b.totalGapPoints -
+				a.totalGapPoints
+		);
+
+	const departmentSummaryMap = new Map<
+		string,
+		{
+			departmentId: string | null;
+			departmentName: string;
+			totalGaps: number;
+			totalGapPoints: number;
+		}
+	>();
+
+	for (const gap of gaps) {
+		const key =
+			gap.departmentId ?? "unassigned";
+
+		if (!departmentSummaryMap.has(key)) {
+			departmentSummaryMap.set(key, {
+				departmentId:
+					gap.departmentId,
+				departmentName:
+					gap.departmentName,
+				totalGaps: 0,
+				totalGapPoints: 0,
+			});
+		}
+
+		const summary =
+			departmentSummaryMap.get(key)!;
+
+		summary.totalGaps += 1;
+		summary.totalGapPoints += gap.gap;
+	}
+
+	const departmentSummary = Array.from(
+		departmentSummaryMap.values()
+	).sort(
+		(a, b) =>
+			b.totalGapPoints -
+			a.totalGapPoints
+	);
+
+	return {
+		summary: {
+			totalGaps: gaps.length,
+			totalGapPoints: gaps.reduce(
+				(sum, gap) => sum + gap.gap,
+				0
+			),
+			employeesAffected: new Set(
+				gaps.map((gap) => gap.employeeId)
+			).size,
+			skillsAffected: new Set(
+				gaps.map((gap) => gap.skillId)
+			).size,
+		},
+		skillSummary,
+		departmentSummary,
+		gaps,
+	};
+};
+
+export const getTrainingNeeds = async () => {
+	const skillGapData = await getSkillGaps();
+
+	const trainingMap = new Map<
+		string,
+		{
+			skillId: string;
+			skillName: string;
+			totalGapPoints: number;
+			affectedEmployees: Set<string>;
+			departments: Set<string>;
+			taskCount: number;
+			mandatoryRequirements: number;
+		}
+	>();
+
+	for (const gap of skillGapData.gaps) {
+		if (!trainingMap.has(gap.skillId)) {
+			trainingMap.set(gap.skillId, {
+				skillId: gap.skillId,
+				skillName: gap.skillName,
+				totalGapPoints: 0,
+				affectedEmployees: new Set<string>(),
+				departments: new Set<string>(),
+				taskCount: 0,
+				mandatoryRequirements: 0,
+			});
+		}
+
+		const training = trainingMap.get(gap.skillId)!;
+
+		training.totalGapPoints += gap.gap;
+		training.affectedEmployees.add(gap.employeeId);
+		training.departments.add(gap.departmentName);
+		training.taskCount += 1;
+
+		if (gap.mandatory) {
+			training.mandatoryRequirements += 1;
+		}
+	}
+
+	const trainingNeeds = Array.from(trainingMap.values())
+		.map((training) => ({
+			skillId: training.skillId,
+			skillName: training.skillName,
+			totalGapPoints: training.totalGapPoints,
+			affectedEmployees: training.affectedEmployees.size,
+			departments: Array.from(training.departments),
+			taskCount: training.taskCount,
+			mandatoryRequirements: training.mandatoryRequirements,
+		}))
+		.sort((a, b) => b.totalGapPoints - a.totalGapPoints);
+
+	const departmentMap = new Map<
+		string,
+		{
+			department: string;
+			totalGapPoints: number;
+			skills: Set<string>;
+			employees: Set<string>;
+		}
+	>();
+
+	for (const gap of skillGapData.gaps) {
+		const department = gap.departmentName;
+
+		if (!departmentMap.has(department)) {
+			departmentMap.set(department, {
+				department,
+				totalGapPoints: 0,
+				skills: new Set<string>(),
+				employees: new Set<string>(),
+			});
+		}
+
+		const departmentData = departmentMap.get(department)!;
+
+		departmentData.totalGapPoints += gap.gap;
+		departmentData.skills.add(gap.skillId);
+		departmentData.employees.add(gap.employeeId);
+	}
+
+	const departmentTrainingNeeds = Array.from(
+		departmentMap.values()
+	)
+		.map((department) => ({
+			department: department.department,
+			totalGapPoints: department.totalGapPoints,
+			skillsAffected: department.skills.size,
+			employeesAffected: department.employees.size,
+		}))
+		.sort(
+			(a, b) =>
+				b.totalGapPoints - a.totalGapPoints
+		);
+
+	return {
+		summary: {
+			trainingAreas: trainingNeeds.length,
+			totalGapPoints: skillGapData.summary.totalGapPoints,
+			employeesAffected:
+				skillGapData.summary.employeesAffected,
+			skillsAffected:
+				skillGapData.summary.skillsAffected,
+		},
+
+		trainingNeeds,
+
+		departmentTrainingNeeds,
 	};
 };

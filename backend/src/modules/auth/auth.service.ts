@@ -5,70 +5,96 @@ import { ENV } from "../../config/env";
 import { prisma } from "../../utils/db";
 
 type PublicUser = {
-	id: string;
-	email: string;
-	role: Role;
-	createdAt: Date;
+  id: string;
+  email: string;
+  role: Role;
+  createdAt: Date;
 };
 
 export const registerUser = async (
-	email: string,
-	password: string,
-	role: Role
+  email: string,
+  password: string,
+  role: Role
 ): Promise<PublicUser> => {
-	const existingUser = await prisma.user.findUnique({
-		where: { email }
-	});
+  const normalizedEmail = email.trim().toLowerCase();
 
-	if (existingUser) {
-		throw new Error("User already exists");
-	}
+  const existingUser = await prisma.user.findUnique({
+    where: {
+      email: normalizedEmail,
+    },
+  });
 
-	const passwordHash = await bcrypt.hash(password, 10);
+  if (existingUser) {
+    throw new Error("User already exists");
+  }
 
-	const user = await prisma.user.create({
-		data: {
-			email,
-			passwordHash,
-			role
-		},
-		select: {
-			id: true,
-			email: true,
-			role: true,
-			createdAt: true
-		}
-	});
+  const passwordHash = await bcrypt.hash(password, 10);
 
-	return user;
+  const user = await prisma.user.create({
+    data: {
+      email: normalizedEmail,
+      passwordHash,
+      role,
+    },
+    select: {
+      id: true,
+      email: true,
+      role: true,
+      createdAt: true,
+    },
+  });
+
+  return user;
 };
 
-export const loginUser = async (email: string, password: string): Promise<{ token: string, user: any, profile: any }> => {
-	const user = await prisma.user.findUnique({
-		where: { email },
-		include: { profile: true }
-	});
+export const loginUser = async (
+  email: string,
+  password: string
+): Promise<{
+  token: string;
+  user: any;
+  profile: any;
+}> => {
+  const normalizedEmail = email.trim().toLowerCase();
 
-	if (!user) {
-		throw new Error("Invalid credentials");
-	}
+  const user = await prisma.user.findUnique({
+    where: {
+      email: normalizedEmail,
+    },
+    include: {
+      profile: true,
+    },
+  });
 
-	const isValidPassword = await bcrypt.compare(password, user.passwordHash);
+  if (!user) {
+    throw new Error("Invalid credentials");
+  }
 
-	if (!isValidPassword) {
-		throw new Error("Invalid credentials");
-	}
+  const isValidPassword = await bcrypt.compare(
+    password,
+    user.passwordHash
+  );
 
-	const token = jwt.sign(
-		{
-			userId: user.id,
-			role: user.role
-		},
-		ENV.JWT_SECRET,
-        { expiresIn: "1d" }
-	);
+  if (!isValidPassword) {
+    throw new Error("Invalid credentials");
+  }
 
-	const { profile, passwordHash: _, ...userData } = user;
+  const token = jwt.sign(
+    {
+      userId: user.id,
+      role: user.role,
+    },
+    ENV.JWT_SECRET,
+    {
+      expiresIn: "1d",
+    }
+  );
 
-	return { token, user: userData, profile };
+  const { profile, passwordHash: _, ...userData } = user;
+
+  return {
+    token,
+    user: userData,
+    profile,
+  };
 };
